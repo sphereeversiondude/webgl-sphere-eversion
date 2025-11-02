@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>Sphere Eversion</title>
+<style>
+body, html {
+  margin: 0px;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: rgb(85,85,85);
+}
+#framerate {
+  color: white;
+  text-align: center;
+}
+#controls {
+  position: absolute;
+  top: 10px;
+  left: 0px;
+  color: white;
+  padding: 1em;
+  text-align: center;
+}
+#example {
+  width: 100%;
+  height: 100%;
+}
+section {	
+  position: absolute;
+  top: 45%;
+  width: 100%;
+  text-align: center;
+  color: white;
+}
+#camera {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 1em;
+  text-align: center;
+  color: white;
+}
+#links {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  color: white;
+}
+#title {
+  position: absolute;
+  top: 2%;
+  width: 100%;
+  color: white;
+  text-align: center;
+}
+</style>
+<script src="../webgl/webgl-utils.js"></script>
+<script src="../webgl/J3DI.js"> </script>
+<script src="../webgl/J3DIMath.js"></script>
+<script src="../webgl/jszip.min.js"></script> 
+<script src="../webgl/jszip-utils.js"></script>
+<script id="vshader" type="x-shader/x-vertex">
+    precision mediump float;
+    uniform mat4 u_modelViewProjMatrix;
+    uniform vec3 lightDir;
+    uniform vec3 camPosition;
+    uniform float s;
+    uniform float minLat;
+    uniform float maxLat;
+    uniform float minLong;
+    uniform float maxLong;
+
+    const float pi=3.14159265359; 
+
+    attribute vec3 vPosition1;
+    attribute vec3 vPosition2;
+    attribute vec3 vNormal1;
+    attribute vec3 vNormal2;
+    attribute vec3 eNormal1;
+    attribute vec3 eNormal2;
+    attribute vec3 oPosition;
+    
+    varying vec3 vc;
+    varying vec3 vn;
+    varying vec3 vpos;
+    varying vec3 opos;
+
+    void main()
+    {
+	vec3 o = (1.-s)*vPosition1+s*vPosition2;
+	vpos = o;
+        gl_Position = u_modelViewProjMatrix * vec4(o, 1.0);
+	//vc = vColor;
+	vec3 normal1 = normalize((1.-s)*vNormal1+s*vNormal2);
+	vec3 evn = normalize((1.-s)*eNormal1+s*eNormal2);
+
+	if (dot(camPosition-o,evn) < 0.) {
+	vn = -1.*normal1;
+	vc = vec3(0.,1.,0.);
+	} else {
+	vn = normal1;
+	vc = vec3(1.,0.,0.);
+	}
+	opos = oPosition;
+	
+    }
+</script>
+
+<script id="fshader" type="x-shader/x-fragment">
+    precision mediump float;
+    varying vec3 vc;
+    varying vec3 vn;
+    varying vec3 vpos;
+    varying vec3 opos;
+    uniform vec3 lightDir;
+    uniform float shininess;
+    uniform vec3 camPosition;
+    uniform float minLat;
+    uniform float maxLat;
+    uniform float minLong;
+    uniform float maxLong;
+    
+    const float pi=3.14159265359; 
+
+    void main()
+    {
+	vec3 norm = normalize(vn);
+	vec3 rm = normalize(2.0*dot(lightDir,norm)*norm-lightDir);
+	float val = clamp(dot(normalize(camPosition-vpos),rm),0.0,1.0);
+	val = val*val;
+	val = val*val;
+	val = val*val;
+	float specular = val*val;
+	float dp = 0.5*clamp(dot(norm,lightDir),0.0,1.0)+0.5;
+	vec3 color = dp*vc+specular*shininess*(0.3,0.3,0.3);
+	gl_FragColor = vec4(color,1.0);
+	//latitude bounds
+	if (atan(opos.z,sqrt(opos.x*opos.x+opos.y*opos.y)) < pi*minLat/180. || atan(opos.z,sqrt(opos.x*opos.x+opos.y*opos.y)) > pi*maxLat/180.) { discard; }
+	//longitude bounds
+	if (atan(opos.y,opos.x) < pi*(minLong-180.)/180. || atan(opos.y,opos.x) > pi*(maxLong-180.)/180.) { discard; }
+    }
+</script>
+
+<script>
+    var g = {};
+    var gl;
+    var initialized = false;
+    var updateMatrices; //flag used to check whether we should update the model view matrix
+    
+    function cross(v1, v2) {
+    return [v1[1]*v2[2]-v1[2]*v2[1],-v1[0]*v2[2]+v1[2]*v2[0],v1[0]*v2[1]-v1[1]*v2[0]];
+    }
+    
+    function normalize(v1) {
+    var norm = Math.sqrt(v1[0]*v1[0]+v1[1]*v1[1]+v1[2]*v1[2]);
+    if (norm > 0.00001) return [v1[0]/norm,v1[1]/norm,v1[2]/norm];
+    else return v1;
+    }
+    
+	function setupShapes(coordDicts,faces) {	
+	var o = {};
+	
+	// vertices of a tetrahedron centered at the origin
+	//var colorArr = $colors;
+	var posArray = [];
+	for (var j = 0; j < coordDicts.length; j++) {
+		posArray[j] = [];        	
+	}
+	var tNormalUnit = [];
+	var pos1 = coordDicts[0];
+	var normalsDict = [];
+	for (var k = 0; k < coordDicts.length; k++) {
+		normalsDict.push([]);
+		for (var i = 0; i < 3*faces.length; i++) {
+			normalsDict[k].push([]);
+		}
+	}
+	var enormalsFlat = [];
+	for (var k = 0; k < coordDicts.length; k++) {
+	enormalsFlat.push([]);
+	}
+	for (var i = 0; i < faces.length; i++) {
+	        for (var j = 0; j < coordDicts.length; j++) {
+	        	posArray[j].push.apply(posArray[j],coordDicts[j][faces[i][0]]);
+	        	posArray[j].push.apply(posArray[j],coordDicts[j][faces[i][1]]);
+	        	posArray[j].push.apply(posArray[j],coordDicts[j][faces[i][2]]);
+	        	var cd = coordDicts[j];
+	        	var normalVec = cross([cd[faces[i][2]][0]-cd[faces[i][0]][0],cd[faces[i][2]][1]-cd[faces[i][0]][1],cd[faces[i][2]][2]-cd[faces[i][0]][2]],
+		[cd[faces[i][1]][0]-cd[faces[i][0]][0],cd[faces[i][1]][1]-cd[faces[i][0]][1],cd[faces[i][1]][2]-cd[faces[i][0]][2]]);
+		        if (j==0) console.log(normalVec[0]*coordDicts[0][faces[i][0]][0]+normalVec[1]*coordDicts[0][faces[i][0]][1]+normalVec[2]*coordDicts[0][faces[i][0]][2]);
+			normalVec = normalize(normalVec);
+			for (var k = 0; k < 3; k++) {
+			enormalsFlat[j].push.apply(enormalsFlat[j],normalVec);
+			}
+	        	for (var k = 0; k < 3; k++) {
+	        	normalsDict[j][faces[i][k]].push(normalVec);
+	        	}
+	      	}
+	}
+	
+	var normalsFlat = [];
+	for (var k = 0; k < coordDicts.length; k++) normalsFlat.push([]);
+	
+	
+	for (var j = 0; j < coordDicts.length; j++) {
+	        for (var i = 0; i < faces.length; i++) {
+	                for (var l = 0; l < faces[i].length; l++) {
+	        		sum = [0.,0.,0.];
+	        		for (var k = 0; k < normalsDict[j][faces[i][l]].length; k++) {
+	        		sum[0] += normalsDict[j][faces[i][l]][k][0]; 
+	        		sum[1] += normalsDict[j][faces[i][l]][k][1];
+	        		sum[2] += normalsDict[j][faces[i][l]][k][2];
+	        		}
+	        	        normalsFlat[j].push.apply(normalsFlat[j],normalize(sum));
+	        	}
+	      	}
+	}
+
+	o.normals = [];
+	o.colors = [];
+	o.final = [];
+	
+	var typedArrays = [];
+	for (var i = 0; i < posArray.length; i++) {
+	typedArrays.push(new Float32Array(posArray[i]));
+	}
+	
+	var typedNormals = [];
+	for (var i = 0; i < normalsFlat.length; i++) {
+	typedNormals.push(new Float32Array(normalsFlat[i]));
+	}
+	
+	var typedENormals = [];
+	for (var i = 0; i < normalsFlat.length; i++) {
+	typedENormals.push(new Float32Array(enormalsFlat[i]));
+	}
+
+	o.typedNormals = typedNormals;
+	o.typedENormals = typedENormals;
+	o.typedArrays = typedArrays;
+	
+	//for (var i = 0; i < faces.length*3; i++) o.colors.push.apply(o.colors, colorArr[i]);
+	
+	o.numTriangles = faces.length;
+
+	return o;
+	}
+
+    function init()
+    {
+        // Initialize
+	gl = null;
+        gl = initWebGL(
+            // The id of the Canvas Element
+            "example");
+        if (!gl) {
+          return;
+        }
+        
+        document.getElementById("loading").innerHTML = "<h1>Loading data... <br>(may take a minute)</h1>";
+
+        g.program = simpleSetup(
+            gl,
+            // The ids of the vertex and fragment shaders
+            "vshader", "fshader",
+            // The vertex attribute names used by the shaders.
+            // The order they appear here corresponds to their index
+            // used later.
+            [ "vNormal1", "vNormal2", "eNormal1", "eNormal2", "vPosition1","vPosition2","oPosition"],
+            // The clear color and depth values
+            [ 0.3, 0.3, 0.3, 1 ], 10000);
+        
+        //cut for local testing   
+        JSZipUtils.getBinaryContent("data.zip",continueInit);
+        
+        }
+        
+        function continueInit(err,data) {
+	
+	zip = new JSZip(data);
+
+	eval(zip.file("dataList.js").asText());
+	//cut for local testing
+	
+	var o = setupShapes(coordDicts,faces);
+	g.numTriangles = o.numTriangles;	
+
+	console.log("initialized");
+
+        // Set some uniform variables for the shaders
+	g.light = [0,1,0];
+	g.lightLocation = gl.getUniformLocation(g.program, "lightDir");
+	
+	gl.uniform3f(g.lightLocation, g.light[0], g.light[1], g.light[2]);
+
+   // Create some matrices to use later and save their locations in the shaders
+   g.u_modelViewProjMatrixLoc =
+                gl.getUniformLocation(g.program, "u_modelViewProjMatrix");
+
+	g.camPositionLoc = gl.getUniformLocation(g.program, "camPosition");
+
+	g.sLoc = gl.getUniformLocation(g.program, "s");
+	g.sVal = 0;
+	gl.uniform1f(g.sLoc,g.sVal);
+	
+	g.shininessLoc = gl.getUniformLocation(g.program, "shininess");
+	g.minLatLoc = gl.getUniformLocation(g.program, "minLat");
+	g.maxLatLoc = gl.getUniformLocation(g.program, "maxLat");
+	g.minLongLoc = gl.getUniformLocation(g.program, "minLong");
+	g.maxLongLoc = gl.getUniformLocation(g.program, "maxLong");
+
+   g.mvpMatrix = new J3DIMatrix4();
+	g.mvMatrix = new J3DIMatrix4();
+	g.panMatrix = new J3DIMatrix4();
+	g.panMatrix.makeIdentity();
+	g.panMatrixInv = new J3DIMatrix4();
+	g.panMatrixInv.makeIdentity();
+	g.zoomMatrix = new J3DIMatrix4();
+	g.zoomMatrix.makeIdentity();
+	g.zoomvec = new J3DIVector3();
+	g.rotMatrix = new J3DIMatrix4();
+	g.rotMatrix.makeIdentity();
+
+	g.cameraMatrix = new J3DIMatrix4();
+	g.cameraMatrix.makeIdentity();
+	g.invMatrix = new J3DIMatrix4();
+	g.lastDate = 0;
+
+	// Enable all of the vertex attribute arrays.
+   	gl.enableVertexAttribArray(0);
+   	gl.enableVertexAttribArray(1);
+   	gl.enableVertexAttribArray(2); 
+	gl.enableVertexAttribArray(3); 
+	gl.enableVertexAttribArray(4);   
+	gl.enableVertexAttribArray(5);  
+	gl.enableVertexAttribArray(6);   
+	
+	// Set up all the vertex attributes for vertices, normals and texCoords
+	g.normalBuffer1 = gl.createBuffer();        
+	gl.bindBuffer(gl.ARRAY_BUFFER, g.normalBuffer1);
+	gl.bufferData(gl.ARRAY_BUFFER, o.typedNormals[0], gl.DYNAMIC_DRAW);
+	gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+	
+	g.normalBuffer2 = gl.createBuffer();        
+	gl.bindBuffer(gl.ARRAY_BUFFER, g.normalBuffer2);
+	gl.bufferData(gl.ARRAY_BUFFER, o.typedNormals[1], gl.DYNAMIC_DRAW);
+	gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+	
+	g.enormalBuffer1 = gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER, g.enormalBuffer1);
+	gl.bufferData(gl.ARRAY_BUFFER, o.typedENormals[0], gl.DYNAMIC_DRAW);
+	gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
+	
+	g.enormalBuffer2 = gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER, g.enormalBuffer2);
+	gl.bufferData(gl.ARRAY_BUFFER, o.typedENormals[1], gl.DYNAMIC_DRAW);
+	gl.vertexAttribPointer(3, 3, gl.FLOAT, false, 0, 0);
+	
+	g.coordBuffer1 = gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER, g.coordBuffer1);
+	gl.bufferData(gl.ARRAY_BUFFER, o.typedArrays[0], gl.DYNAMIC_DRAW);
+	gl.vertexAttribPointer(4, 3, gl.FLOAT, false, 0, 0);
+
+	g.coordBuffer2 = gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER, g.coordBuffer2);
+	gl.bufferData(gl.ARRAY_BUFFER, o.typedArrays[1], gl.DYNAMIC_DRAW);
+	gl.vertexAttribPointer(5, 3, gl.FLOAT, false, 0, 0);
+	
+	//buffer stores initial position of points on the sphere to be able to bound rendering by latitude/longitude
+	g.originalPosBuffer = gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER, g.originalPosBuffer);
+	gl.bufferData(gl.ARRAY_BUFFER, o.typedArrays[0], gl.STATIC_DRAW);
+	gl.vertexAttribPointer(6, 3, gl.FLOAT, false, 0, 0);
+	
+	g.currentBuffer = 0;
+		
+	g.typedArrays = o.typedArrays;
+	g.typedNormals = o.typedNormals;
+	g.typedENormals = o.typedENormals;
+	
+	//console.log(tValue);
+	//console.log(coords);
+	//console.log(colors);
+	//console.log(normals);
+	
+	document.getElementById("loading").innerHTML = "";
+
+	updaterotQ();
+	updatecamQ();
+	initialized = true;
+	
+	g.lccanvas = document.getElementById("lccanvas");
+	g.ctx = g.lccanvas.getContext("2d");
+	lcmousemove(0,-20);
+	
+	updateValue("animValue","0");
+	updateValue("shineValue","1");	
+	updateValue("minLat","-90");
+	updateValue("maxLat","90");
+	updateValue("minLong","0");
+	updateValue("maxLong","360");
+	
+	g.controls.addEventListener("mousemove", handlemousemove, false);
+	g.framerate = document.getElementById("framerate");
+	g.framerate.addEventListener("mousemove",handlemousemove,false);
+
+	//g.camera.addEventListener("mousemove",handlemousemove,false);
+	
+		g.lccanvas.addEventListener("mousedown", function (event) {g.lcDrag = true;
+		handlemousemove(event);}, false);
+
+    }
+
+    var requestId;
+
+    function reshape()
+    {
+        // change the size of the canvas's backing store to match the size it is displayed.
+        if (g.maincanvas.clientWidth == g.maincanvas.width && g.maincanvas.clientHeight == g.maincanvas.height)
+            return;
+
+        g.maincanvas.width = g.maincanvas.clientWidth;
+        g.maincanvas.height = g.maincanvas.clientHeight;
+
+        // Set the viewport and projection matrix for the scene
+        gl.viewport(0, 0, g.maincanvas.clientWidth, g.maincanvas.clientHeight);
+        g.perspectiveMatrix = new J3DIMatrix4();
+	     var fovangle = 30;
+        g.perspectiveMatrix.perspective(fovangle, g.maincanvas.clientWidth / g.maincanvas.clientHeight, 0.1, 100);
+	     g.fovangletan = Math.tan(Math.PI*fovangle/360);
+	     var m = g.perspectiveMatrix.getAsArray();
+	     updateMatrices = true;
+    }
+
+    function updatecamQ() {
+	g.curCamQ = qNormalize(g.curCamQ);
+	var qr = g.curCamQ[0];	
+	var qi = g.curCamQ[1];
+	var qj = g.curCamQ[2];
+	var qk = g.curCamQ[3];
+	var m = [1-2*qj*qj-2*qk*qk, 2*(qi*qj-qk*qr), 2*(qi*qk+qj*qr), 0,
+		2*(qi*qj+qk*qr), 1-2*qi*qi-2*qk*qk, 2*(qj*qk-qi*qr), 0,
+		2*(qi*qk-qj*qr), 2*(qj*qk+qi*qr), 1-2*qi*qi-2*qj*qj, 0,
+		0, 0, 0, 1];
+	g.panMatrix.load(m);
+	g.panMatrixInv.load(m);
+	g.panMatrixInv.transpose();
+	updateMatrices = true;
+    }
+
+    function updaterotQ() {
+	g.curRotQ = qNormalize(g.curRotQ);
+	var qr = g.curRotQ[0];
+	var qi = g.curRotQ[1];
+	var qj = g.curRotQ[2];
+	var qk = g.curRotQ[3];
+	var m = [1-2*qj*qj-2*qk*qk, 2*(qi*qj-qk*qr), 2*(qi*qk+qj*qr), 0,
+		2*(qi*qj+qk*qr), 1-2*qi*qi-2*qk*qk, 2*(qj*qk-qi*qr), 0,
+		2*(qi*qk-qj*qr), 2*(qj*qk+qi*qr), 1-2*qi*qi-2*qj*qj, 0,
+		0, 0, 0, 1];
+	g.rotMatrix.load(m);
+	updateMatrices = true;
+    }
+
+    function drawPicture()
+    {
+	if (initialized) {        
+	// Make sure the canvas is sized correctly.
+        reshape();
+
+        // Clear the canvas
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+	
+        // Make a model/view matrix.
+	
+	if (updateMatrices) {
+	var rotated = [Math.sin(2*Math.PI*g.currentAngle/360)*g.light[0]+Math.cos(2*Math.PI*g.currentAngle/360)*g.light[1],-Math.sin(2*Math.PI*g.currentAngle/360)*g.light[1]+Math.cos(2*Math.PI*g.currentAngle/360)*g.light[0],g.light[2]];
+	gl.uniform3f(g.lightLocation, rotated[0], rotated[1], rotated[2]);
+	        
+	g.mvMatrix.load(g.panMatrix);
+	g.mvMatrix.multiply(g.zoomMatrix);
+	g.mvMatrix.translate(0,0,-20);
+	g.mvMatrix.multiply(g.rotMatrix);
+	g.mvMatrix.rotate(90,1,0,0);	
+	//g.mvMatrix.multiply(g.rotMatrix);	
+
+	g.mvMatrix.rotate(g.currentAngle, 0,0,1);
+	m = g.mvMatrix.getAsArray();
+	var q = new J3DIMatrix4();
+	q.load(g.mvMatrix);
+	q.invert();
+	m = q.getAsArray();
+	gl.uniform3f(g.camPositionLoc,m[12],m[13],m[14]);
+	//console.log(m[12]+" "+m[13]+" "+m[14]);
+
+        // Construct the model-view * projection matrix and pass it in
+	g.mvpMatrix.makeIdentity();
+	g.mvpMatrix.multiply(g.perspectiveMatrix);
+   	g.mvpMatrix.multiply(g.mvMatrix);
+   	g.mvpMatrix.setUniform(gl, g.u_modelViewProjMatrixLoc, false);
+	updateMatrices = false;
+	}
+		  //console.log('drawing..');
+		  //console.log(g.mvpMatrix);
+        gl.drawArrays(gl.TRIANGLES, 0, 3*g.numTriangles);
+
+                framerate.snapshot();
+	if (!g.angleDrag) {
+	g.currentAngle += g.incAngle;
+	if (g.currentAngle >= 360) g.currentAngle -= 360;
+	if (g.incAngle != 0) updateMatrices = true;
+        }
+	/*}*/
+	
+	if (g.sInc != 0) {
+	g.sVal += g.sInc;
+	if (g.sVal+g.sInc >= 1) { g.sInc = -g.sInc; }
+        if (g.sVal+g.sInc <= 0) { g.sInc = -g.sInc; }
+	gl.uniform1f(g.sLoc,g.sVal);
+	document.getElementById("anim").value = g.sVal;
+	updateValue("animValue",g.sVal);
+	}
+	}
+
+    }
+
+    //quaternion multiplication
+    function qMultiply(q1, q2) {
+	return [q1[0]*q2[0]-q1[1]*q2[1]-q1[2]*q2[2]-q1[3]*q2[3],
+		q1[0]*q2[1]+q1[1]*q2[0]+q1[2]*q2[3]-q1[3]*q2[2],
+		q1[0]*q2[2]-q1[1]*q2[3]+q1[2]*q2[0]+q1[3]*q2[1],
+		q1[0]*q2[3]+q1[1]*q2[2]-q1[2]*q2[1]+q1[3]*q2[0]];
+    }
+
+    //quaternion normalization
+    function qNormalize(q) {
+	var norm = Math.sqrt(q[0]*q[0]+q[1]*q[1]+q[2]*q[2]+q[3]*q[3]);
+	if (norm != 0) return [q[0]/norm, q[1]/norm, q[2]/norm, q[3]/norm];
+	else return q;
+    }
+    
+        function updateValue(id,value) {
+	if (initialized) {
+	var val = Number(value);
+	if (id=='animValue') {
+                //gl.useProgram(prog);
+               var inVal = val*(g.typedArrays.length-1)%1;
+                if (val==1) inVal = 1;
+		gl.uniform1f(g.sLoc,inVal);
+		if (val > 0.99) val=0.99;
+		var buffNum = Math.floor(val*(g.typedArrays.length-1));
+		if (g.currentBuffer!=buffNum) {
+		gl.bindBuffer(gl.ARRAY_BUFFER, g.coordBuffer1);
+		//console.log(buffNum);
+	        gl.bufferSubData(gl.ARRAY_BUFFER, 0, g.typedArrays[buffNum]);
+	        gl.bindBuffer(gl.ARRAY_BUFFER, g.coordBuffer2);
+	        gl.bufferSubData(gl.ARRAY_BUFFER, 0, g.typedArrays[buffNum+1]);
+	        gl.bindBuffer(gl.ARRAY_BUFFER, g.normalBuffer1);
+	        gl.bufferSubData(gl.ARRAY_BUFFER, 0, g.typedNormals[buffNum]);
+	        gl.bindBuffer(gl.ARRAY_BUFFER, g.normalBuffer2);
+	        gl.bufferSubData(gl.ARRAY_BUFFER, 0, g.typedNormals[buffNum+1]);
+	        gl.bindBuffer(gl.ARRAY_BUFFER, g.enormalBuffer1);
+	        gl.bufferSubData(gl.ARRAY_BUFFER, 0, g.typedENormals[buffNum]);
+	        gl.bindBuffer(gl.ARRAY_BUFFER, g.enormalBuffer2);
+	        gl.bufferSubData(gl.ARRAY_BUFFER, 0, g.typedENormals[buffNum+1]);
+	        g.currentBuffer = buffNum;
+	        }
+		document.getElementById("animval").innerHTML = val.toFixed(4);
+	}
+	if (id=='shineValue') {
+		//gl.useProgram(prog_show);
+		gl.uniform1f(g.shininessLoc,val);
+		document.getElementById("shineval").innerHTML = value;
+	}
+	if (id=='minLat') {
+		//gl.useProgram(prog_show);
+		gl.uniform1f(g.minLatLoc,val);
+		document.getElementById("minlatval").innerHTML = value;
+	}
+	if (id=='maxLat') {
+		//gl.useProgram(prog_show);
+		gl.uniform1f(g.maxLatLoc,val);
+		document.getElementById("maxlatval").innerHTML = value;
+	}
+	if (id=='minLong') {
+		//gl.useProgram(prog_show);
+		gl.uniform1f(g.minLongLoc,val);
+		document.getElementById("minlongval").innerHTML = value;
+	}
+	if (id=='maxLong') {
+		//gl.useProgram(prog_show);
+		gl.uniform1f(g.maxLongLoc,val);
+		document.getElementById("maxlongval").innerHTML = value;
+	}
+	}
+    }
+
+    //returns a rotation that will rotate p1 to p2 on an axis perpendicular to the plane through p1 and p2
+    function getrotq(p1, p2) {
+	var cross = [p1[1]*p2[2]-p1[2]*p2[1], -p1[0]*p2[2]+p1[2]*p2[0], p1[0]*p2[1]-p1[1]*p2[0]];
+	var norm1 = Math.sqrt(p1[0]*p1[0]+p1[1]*p1[1]+p1[2]*p1[2]);
+	var norm2 = Math.sqrt(p2[0]*p2[0]+p2[1]*p2[1]+p2[2]*p2[2]);
+	var dot = p1[0]*p2[0]+p1[1]*p2[1]+p1[2]*p2[2];
+	return [norm1*norm2+dot, cross[0], cross[1], cross[2]];
+    } 
+
+    var sqrt2inv = 1/Math.sqrt(2);
+    var RADIUS = 10;
+
+    function lcmousemove(x, y) {
+	if (initialized) {
+	if (x*x+y*y > 40*40) {
+		var norm = Math.sqrt(x*x+y*y);
+		x = 40*x/norm;
+		y = 40*y/norm;
+	}
+	g.light = [-x/40.0,Math.sqrt(Math.abs(1-(x/40.0)*(x/40.0)-(y/40.0)*(y/40.0))),-y/40.0];
+	var rotated = [Math.sin(2*Math.PI*g.currentAngle/360)*g.light[0]+Math.cos(2*Math.PI*g.currentAngle/360)*g.light[1],-Math.sin(2*Math.PI*g.currentAngle/360)*g.light[1]+Math.cos(2*Math.PI*g.currentAngle/360)*g.light[0],g.light[2]];
+	gl.uniform3f(g.lightLocation, rotated[0], rotated[1], rotated[2]);
+	g.ctx.clearRect(0,0,150,150);
+	g.ctx.fillStyle = "#808080";
+	g.ctx.beginPath();
+	g.ctx.arc(75, 75, 40, 0, 2*Math.PI, false);
+	g.ctx.fill();
+	g.ctx.fillStyle = "#DC143C";
+	g.ctx.beginPath();
+	g.ctx.arc(x+75, y+75, 5, 0, 2*Math.PI, false);
+	g.ctx.fill();
+	}
+    }
+    
+	
+    function pageMouseUp (event) {
+    g.lcDrag = false;
+	 g.leftButtonDrag = false;
+	 g.rightButtonDrag = false;
+	 g.hcDrag = false;
+    }
+    
+	
+    function handleScroll(evt){
+	if (initialized) {
+	var delta = evt.wheelDelta ? evt.wheelDelta/40 : evt.detail ? -evt.detail : 0;
+	if (delta) {
+		var rect = g.maincanvas.getBoundingClientRect();
+		var sfact = g.fovangletan/(rect.height/2.0)/25;
+		var x = -evt.clientX+rect.width/2.0+rect.left;
+		var y = evt.clientY-rect.height/2.0-rect.top;
+		g.zoomvec.load(delta*x*sfact,delta*y*sfact,delta/25);
+		g.zoomvec.multVecMatrix(g.panMatrixInv);
+		g.zoomMatrix.translate(g.zoomvec[0],g.zoomvec[1],g.zoomvec[2]);
+		updateMatrices = true;
+	}
+	}
+    }
+
+    function pan(x,y) {
+	var rect = g.maincanvas.getBoundingClientRect();
+	var x1 = -g.dragBaseX+rect.width/2.0+rect.left;
+	var y1 = g.dragBaseY-rect.height/2.0-rect.top;
+	var x2 = -x+rect.width/2.0+rect.left;
+	var y2 = y-rect.height/2.0-rect.top;
+	var sfact = g.fovangletan/(rect.height/2.0);
+	var p1 = [sfact*x1,sfact*y1,1.0];
+	var p2 = [sfact*x2,sfact*y2,1.0];
+	var q1 = getrotq(p2,p1);
+	g.curCamQ = qMultiply(g.baseCamQ,q1);
+	updatecamQ();
+    }
+
+    function rotate(x,y) {
+	var dx = x-g.dragBaseX;
+	var dy = y-g.dragBaseY;
+	var norm = Math.sqrt(dx*dx+dy*dy);
+	if (norm > 0) {
+	dx = dx/norm;
+	dy = dy/norm;
+	}
+	var q2 = qMultiply(g.curCamQ,qMultiply([Math.cos(norm/200),-dy*Math.sin(norm/200),-dx*Math.sin(norm/200),0],[g.curCamQ[0],
+	-g.curCamQ[1],-g.curCamQ[2],-g.curCamQ[3]]));
+	g.curRotQ = qMultiply(g.baseRotQ,q2);	
+	updaterotQ();
+    }
+   
+    function handleMouseDown(evt){
+	if (initialized) {	
+	if (evt.button==0) {
+		g.leftButtonDrag = true;
+		g.dragBaseX = evt.clientX;
+		g.dragBaseY = evt.clientY;
+		g.baseCamQ = g.curCamQ;
+	} else if (evt.button==2) {
+		g.rightButtonDrag = true;
+		g.dragBaseX = evt.clientX;
+		g.dragBaseY = evt.clientY;
+		g.baseRotQ = g.curRotQ;
+	}
+	}
+    }
+
+    function handlemousemove(event){
+	var rect = g.maincanvas.getBoundingClientRect();
+	g.curMouseX = -event.clientX+rect.left+rect.width/2;
+	g.curMouseY = event.clientY-rect.top-rect.height/2;		
+	if (g.leftButtonDrag) {
+		pan(event.clientX,event.clientY);
+	}
+	if (g.rightButtonDrag) {
+		rotate(event.clientX,event.clientY);
+	}
+	if (g.lcDrag) {	
+	var rect = g.lccanvas.getBoundingClientRect();
+	var x = event.clientX-rect.left-75;
+	var y = event.clientY-rect.top-75;
+	lcmousemove(x,y);
+	}
+    }
+    
+
+    function start()
+    {
+	updateMatrices = true;
+        g.maincanvas = document.getElementById("example");
+	g.curCamQ= [1.0,0.0,0.0,0.0];
+	g.controls = document.getElementById("controls");
+	g.curRotQ= [1.0,0.0,0.0,0.0];
+	g.curMouseX = 0;
+	g.curMouseY = 0;
+
+	g.leftButtonDrag = false;
+	g.rightButtonDrag = false;
+        g.maincanvas.addEventListener('webglcontextlost', handleContextLost, false);
+        g.maincanvas.addEventListener('webglcontextrestored', handleContextRestored, false);
+	g.maincanvas.addEventListener('DOMMouseScroll',handleScroll,false);
+        g.maincanvas.addEventListener('mousewheel',handleScroll,false);
+	g.maincanvas.addEventListener("mousedown",handleMouseDown,false);
+	//g.maincanvas.addEventListener("mousemove",handlemousemove,false);
+	window.addEventListener("keydown",handleKeyDown,false);
+
+        init();
+        if (!gl) {
+           return;
+        }
+        
+	g.lcDrag = false;
+	g.hcDrag = false;
+	g.highDrag = false;
+	g.lowDrag = false;
+	g.scDrag = false;
+		
+	document.documentElement.onmouseup = pageMouseUp;
+	document.documentElement.onmouseleave = pageMouseUp;
+	document.documentElement.onmousemove = handlemousemove;
+
+        g.currentAngle = 0;
+	g.spinBox = document.getElementById("Spin");
+	g.animBox = document.getElementById("Anim");
+	spin();
+	anim();
+	if (requestId !== undefined) {
+                window.cancelAnimFrame(requestId);
+                requestId = undefined;
+        }
+	clearInterval(framerate.iterator);
+        framerate = new Framerate("framerate");
+        var f = function() {
+            drawPicture();
+            requestId = window.requestAnimFrame(f, g.maincanvas);
+        };
+        f();
+	
+        function handleContextLost(e) {
+            e.preventDefault();
+            clearLoadingImages();
+            if (requestId !== undefined) {
+                window.cancelAnimFrame(requestId);
+                requestId = undefined;
+            }
+	    initialized = false;
+        }
+
+        function handleContextRestored() {
+            init();
+            f();
+        }
+    }
+
+    function spin() {
+	if (g.spinBox.checked == 0) {
+		g.incAngle = 0;
+	} else {
+		g.incAngle = 0.25;
+	}
+    }
+    
+   function anim() {
+	if (g.animBox.checked == 0) {
+		g.sInc = 0;
+	} else {
+		g.sInc = 0.001;
+	}
+    }
+
+    function reset() {
+	if (initialized) {
+	g.curCamQ= [1.0,0.0,0.0,0.0];
+	g.curRotQ = [1.0,0.0,0.0,0.0];
+	g.currentAngle = 0;
+	g.zoomMatrix.makeIdentity();
+	updatecamQ();
+	updaterotQ();
+	updateMatrices = true;
+	}
+    }
+
+    function center() {
+	if (initialized) {
+	var m = g.mvMatrix.getAsArray();
+	var q1 = getrotq([0,0,1],[-m[12],-m[13],-m[14]]);
+	if (q1[0]*q1[0]+q1[1]*q1[1]+q1[2]*q1[2]+q1[3]*q1[3] > 0.001) {
+	g.curCamQ = qMultiply(g.curCamQ,q1);
+	updatecamQ();
+	}
+	}
+    }
+
+    function handleKeyDown(event) {
+	if (initialized) {
+	var k = event.which || event.keyCode;
+	var dx = 0;
+	var dy = 0;
+	if (k==39) {
+	dx = 1; dy = 0; }
+	if (k==37) {
+	dx = -1; dy = 0; }
+	if (k==38) {
+	dx = 0; dy = -1; }
+	if (k==40) {
+	dx = 0; dy = 1; }
+	if (dx != 0 || dy != 0) {	
+	var q2 = qMultiply(g.curCamQ,qMultiply([Math.cos(1/100),-dy*Math.sin(1/100),-dx*Math.sin(1/100),0],[g.curCamQ[0],
+	-g.curCamQ[1],-g.curCamQ[2],-g.curCamQ[3]]));
+	g.curRotQ = qMultiply(g.curRotQ,q2);
+	updaterotQ();
+	}
+	if (k==65) {
+	var rect = g.maincanvas.getBoundingClientRect();
+	var x = g.curMouseX;
+	var y = g.curMouseY;
+	var sfact = g.fovangletan/(rect.height/2.0)/25;
+	g.zoomvec.load(10*x*sfact,10*y*sfact,10/25);
+	g.zoomvec.multVecMatrix(g.panMatrixInv);
+	g.zoomMatrix.translate(g.zoomvec[0],g.zoomvec[1],g.zoomvec[2]);
+	updateMatrices = true;
+	}
+	if (k==90) {
+	var rect = g.maincanvas.getBoundingClientRect();
+	var x = g.curMouseX;
+	var y = g.curMouseY;
+	var sfact = g.fovangletan/(rect.height/2.0)/25;
+	g.zoomvec.load(-10*x*sfact,-10*y*sfact,-10/25);
+	g.zoomvec.multVecMatrix(g.panMatrixInv);
+	g.zoomMatrix.translate(g.zoomvec[0],g.zoomvec[1],g.zoomvec[2]);
+	updateMatrices = true;
+	}
+	}
+    }
+</script>
+</head>
+
+<body onload="start()">
+<canvas id="example" oncontextmenu="return false;">
+    If you're seeing this your web browser doesn't support the canvas element. Ouch!
+</canvas>
+<div id="controls">
+<div id="framerate"></div>
+<br>
+Light position:
+<br>
+<canvas id="lccanvas" width="150px" height="150px"></canvas>
+<br>
+<br>
+Animation: <div id="animval" style="display: inline"></div>
+<div class="slider"><input class="range" id="anim" min="0.0" max="1.0" value="0.0" step="0.001" oninput="updateValue('animValue', this.value)" type="range" onchange="updateValue('animValue', this.value)"> </div>
+<br>
+Shininess: <div id="shineval" style="display: inline"></div>
+<div class="slider"><input class="range" id="shine" min="0.0" max="1.0" value="1.0" step="0.1" oninput="updateValue('shineValue', this.value)" type="range" onchange="updateValue('shineValue', this.value)"> </div>
+<br>
+<br>
+<label>
+<input type="Checkbox" id="Spin" name="Spin" value="Spin" onclick="spin()" checked="true">Rotate
+</label>
+<br>
+<br>
+<label>
+<input type="Checkbox" id="Anim" name="Anim" value="Anim" onclick="anim()" checked="true">Animate
+</label>
+</div>
+<div id="camera">
+<button type="button" onclick="center()">Center</button>
+<br>
+<br>
+<button type="button" onclick="reset()">Reset</button>
+<br>
+<br>
+Portion of sphere to draw:
+<br>
+<br>
+Min Latitude: <div id="minlatval" style="display: inline"></div>
+<div class="slider"><input class="range" id="minlat" min="-90.0" max="90.0" value="-90.0" step="0.1" oninput="updateValue('minLat', this.value)" type="range" onchange="updateValue('minLat', this.value)"> </div>
+<br>
+<br>
+Max Latitude: <div id="maxlatval" style="display: inline"></div>
+<div class="slider"><input class="range" id="maxlat" min="-90.0" max="90.0" value="90.0" step="0.1" oninput="updateValue('maxLat', this.value)" type="range" onchange="updateValue('maxLat', this.value)"> </div>
+<br>
+<br>
+Min Longitude: <div id="minlongval" style="display: inline"></div>
+<div class="slider"><input class="range" id="minlong" min="0.0" max="360.0" value="0.0" step="0.1" oninput="updateValue('minLong', this.value)" type="range" onchange="updateValue('minLong', this.value)"> </div>
+<br>
+<br>
+Max Longitude: <div id="maxlongval" style="display: inline"></div>
+<div class="slider"><input class="range" id="maxlong" min="0.0" max="360.0" value="360.0" step="0.1" oninput="updateValue('maxLong', this.value)" type="range" onchange="updateValue('maxLong', this.value)"> </div>
+</div>
+<section id="loading"></section>
+<div id="links">
+<a href="controls.html" style="color: #FFFFFF; float:right;" target="_blank">Controls</a>
+</div>
+
+</body>
+
+</html>
