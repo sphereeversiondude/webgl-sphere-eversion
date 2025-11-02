@@ -192,21 +192,6 @@ def createEdgeToFace(faceToEdge):
         edge_to_face[frozenset(set(x[0]).union(set(x[1])))] = (set(x[0])).intersection(set(x[1]))
     return edge_to_face
 
-def createTriangleToVertex(faces):
-    triangle_to_vertex = dict()
-    for x in faces:
-        for y in faces:
-            x0 = set(x)
-            y0 = set(y)
-            if len(x0.intersection(y0))==1:
-                intV = list(x0.intersection(y0))[0]
-                if (frozenset(x),intV) not in triangle_to_vertex:
-                    triangle_to_vertex[(frozenset(x),intV)] = set()
-                for q in y:
-                    if q != intV:
-                        triangle_to_vertex[(frozenset(x),intV)].add(q)
-    return triangle_to_vertex
-
 def vertexToEdge(faces):
     vDict = dict()
     for x in faces:
@@ -217,18 +202,6 @@ def vertexToEdge(faces):
                 if z != y:
                     vDict[y].add(z)
     return vDict
-            
-
-def secondOrderEdge(vertex_to_edge):
-    sDict = dict()
-    for x in vertex_to_edge:
-        if x not in sDict:
-            sDict[x] = set()
-        for q in vertex_to_edge[x]:
-            for y in vertex_to_edge[q]:
-                if y!=x:
-                    sDict[x].add(y)
-    return sDict
 
 def createFPairs(faces):
     fPairs = []
@@ -571,7 +544,7 @@ for x in range(len(p)-1):
     print(str(separateJoint(faceToEdge,np[x],np[x+1]))+' bad edges found in stage '+str(x))
 print('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$')
 fPairs = createFPairs(t)
-print("Second check is for any vertices that have non-adjacent triangles intersecting each other during some part of the linear movement in each stage")
+print("Second check is for any vertices that have non-adjacent triangles intersecting each other (other than just at the vertex) during some part of the linear movement in each stage")
 for x in range(len(p)-1):
     print(str(separatePair(fPairs,np[x],np[x+1]))+' bad vertices found in stage '+str(x))
 
