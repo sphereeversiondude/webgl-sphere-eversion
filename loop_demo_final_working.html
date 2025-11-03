@@ -9,7 +9,7 @@ body, html {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background-color: rgb(85,85,85);
+  background-color: rgb(50,50,50);
 }
 #framerate {
   color: white;
@@ -98,10 +98,10 @@ section {
 
 	if (dot(camPosition-o,evn) < 0.) {
 	vn = -1.*normal1;
-	vc = vec3(0.,1.,0.);
+	vc = vec3(0.,0.8,0.);
 	} else {
 	vn = normal1;
-	vc = vec3(1.,0.,0.);
+	vc = vec3(0.8,0.,0.);
 	}
 	opos = oPosition;
 	
@@ -123,18 +123,25 @@ section {
     uniform float maxLong;
     
     const float pi=3.14159265359; 
+    const float longDiv = 20.;
+    const float latDiv = 20.;
 
     void main()
     {
 	vec3 norm = normalize(vn);
 	vec3 rm = normalize(2.0*dot(lightDir,norm)*norm-lightDir);
+	float lat = atan(opos.z,sqrt(opos.x*opos.x+opos.y*opos.y))/pi+0.5;
+	float lon = (atan(opos.y,opos.x)/pi+1.0)/2.0;
+	float longBit = step(1.,mod(longDiv*lon,2.));
+	float latBit = step(1.,mod(latDiv*lat,2.));
+	vec3 nvc = vc+vec3(0.,0.,0.8*mod(latBit+longBit,2.));
 	float val = clamp(dot(normalize(camPosition-vpos),rm),0.0,1.0);
 	val = val*val;
 	val = val*val;
 	val = val*val;
 	float specular = val*val;
 	float dp = 0.5*clamp(dot(norm,lightDir),0.0,1.0)+0.5;
-	vec3 color = dp*vc+specular*shininess*(0.3,0.3,0.3);
+	vec3 color = dp*nvc+specular*shininess*(0.3,0.3,0.3);
 	gl_FragColor = vec4(color,1.0);
 	//latitude bounds
 	if (atan(opos.z,sqrt(opos.x*opos.x+opos.y*opos.y)) < pi*minLat/180. || atan(opos.z,sqrt(opos.x*opos.x+opos.y*opos.y)) > pi*maxLat/180.) { discard; }
