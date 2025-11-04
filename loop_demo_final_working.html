@@ -96,14 +96,15 @@ section {
 	vec3 normal1 = normalize((1.-s)*vNormal1+s*vNormal2);
 	vec3 evn = normalize((1.-s)*eNormal1+s*eNormal2);
 
-	if (dot(camPosition-o,evn) < 0.) {
-	vn = -1.*normal1;
-	vc = vec3(0.,0.8,0.);
-	} else {
-	vn = normal1;
-	vc = vec3(0.8,0.,0.);
-	}
+	  if (dot(camPosition-o,evn) < 0.) {
+    vn = -1.*normal1;
+    vc = vec3(0.2,0.8,1.0);
+    } else {
+    vn = normal1;
+    vc = vec3(1.0,0.4,0.9);
+    }
 	opos = oPosition;
+
 	
     }
 </script>
@@ -134,7 +135,7 @@ section {
 	float lon = (atan(opos.y,opos.x)/pi+1.0)/2.0;
 	float longBit = step(1.,mod(longDiv*lon,2.));
 	float latBit = step(1.,mod(latDiv*lat,2.));
-	vec3 nvc = vc+vec3(0.,0.,0.8*mod(latBit+longBit,2.));
+	vec3 nvc = vc + mod(latBit+longBit,2.)*vec3(-0.2,-0.2,-0.2);
 	float val = clamp(dot(normalize(camPosition-vpos),rm),0.0,1.0);
 	val = val*val;
 	val = val*val;
@@ -277,7 +278,7 @@ section {
             // used later.
             [ "vNormal1", "vNormal2", "eNormal1", "eNormal2", "vPosition1","vPosition2","oPosition"],
             // The clear color and depth values
-            [ 0.3, 0.3, 0.3, 1 ], 10000);
+             [ 0.11, 0.08, 0.12, 1 ], 10000);
         
         //cut for local testing   
         JSZipUtils.getBinaryContent("data.zip",continueInit);
