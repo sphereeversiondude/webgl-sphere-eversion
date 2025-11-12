@@ -126,10 +126,6 @@ def getMiddle(numLoops,insideProfile,outsideProfile,cintProfile,coutProfile,star
     outR = outsideProfile[0]
     cintR = cintProfile[0]
     coutR = coutProfile[0]
-    outAdjust1 = []
-    outAdjust2 = []
-    inAdjust1 = []
-    inAdjust2 = []
     leveldict = {}
     pairs = []
     pts[counter] = numpy.array([0,0,topZ+gap])
@@ -588,7 +584,7 @@ if __name__ == '__main__':
     #The eversion is built now but in the middle of the sphere it's made of a bunch of
     #blocky polygon shapes.  To make it look smoother,
     #we will use gradient descent/pytorch
-    for i in range(10000):
+    for i in range(3000):
         print(i)
         pts0 = torch.index_select(cArr,1,indexSelect0)
         pts1 = torch.index_select(cArr,1,indexSelect1)
@@ -634,14 +630,15 @@ if __name__ == '__main__':
         lengths = e0-e1
         flengths = torch.linalg.norm(lengths,dim=2)
         dlength = flengths-flengths[0].expand(flengths.shape[0],-1)
-        dlength = dlength*dlength
+        #dlength = dlength*dlength/flengths[0].expand(flengths.shape[0],-1)
+        dlength = flengths-flengths[0].expand(flengths.shape[0],-1)
 
         #Sum all the cost functions and do gradient descent
-        fsum = torch.sum(tot1)+torch.sum(tot2)+torch.sum(dlength)
-        #print((torch.sum(tot1),0.05*torch.sum(tot2),0.5*torch.sum(dlength)))
+        fsum = torch.sum(tot1)+torch.sum(tot2)+2*torch.sum(dlength)
+        print((torch.sum(tot1),torch.sum(tot2),2*torch.sum(dlength)))
         fsum.backward()
 
-        cArr.data = cArr.data-0.000005*mult_tensor*cArr.grad.data
+        cArr.data = cArr.data-0.000025*mult_tensor*cArr.grad.data
         cArr.grad.data.zero_()
     
     twistArr = cArr
